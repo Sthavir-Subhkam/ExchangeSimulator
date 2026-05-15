@@ -12,7 +12,7 @@ find_package(Threads REQUIRED)
 add_library(nse_fo_exchange_sim_lib
   src/config.cpp
   src/crypto.cpp
-  src/simulator.cpp
+  src/runtime.cpp
 )
 
 target_include_directories(nse_fo_exchange_sim_lib

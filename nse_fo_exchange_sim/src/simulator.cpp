@@ -1,3 +1,8 @@
+// NOTE:
+// The live simulator implementation moved to `src/runtime.cpp` when market-data-driven
+// book building, resting order management, and modify/cancel handling were added.
+// This file is no longer compiled by CMake and is kept only as a historical reference.
+
 #include "nse_fo_exchange_sim/simulator.h"
 
 #include "nse_fo_exchange_sim/crypto.h"

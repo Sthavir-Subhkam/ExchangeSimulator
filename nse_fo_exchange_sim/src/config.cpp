@@ -16,6 +16,33 @@ std::string trim(std::string value) {
   return value;
 }
 
+MarketDataEndpoint parseMarketDataEndpoint(const std::string& value) {
+  MarketDataEndpoint endpoint;
+  const std::size_t at_pos = value.find('@');
+  const std::string host_port = trim(value.substr(0, at_pos));
+  if (at_pos != std::string::npos) {
+    endpoint.interface_ip = trim(value.substr(at_pos + 1));
+    if (endpoint.interface_ip.empty()) {
+      endpoint.interface_ip = "0.0.0.0";
+    }
+  }
+
+  const std::size_t colon_pos = host_port.rfind(':');
+  if (colon_pos == std::string::npos) {
+    throw std::runtime_error("Invalid market_data_stream endpoint: " + value);
+  }
+
+  endpoint.host = trim(host_port.substr(0, colon_pos));
+  if (endpoint.host.empty()) {
+    throw std::runtime_error("Missing host in market_data_stream: " + value);
+  }
+  endpoint.port = static_cast<uint16_t>(std::stoul(trim(host_port.substr(colon_pos + 1))));
+  if (endpoint.port == 0) {
+    throw std::runtime_error("Invalid port in market_data_stream: " + value);
+  }
+  return endpoint;
+}
+
 }  // namespace
 
 Config Config::loadFromFile(const std::string& path) {
@@ -67,6 +94,12 @@ Config Config::loadFromFile(const std::string& path) {
       config.fill_number_start = static_cast<uint32_t>(std::stoul(value));
     } else if (key == "fill_delay_us") {
       config.fill_delay_us = std::stoull(value);
+    } else if (key == "token_filter_file") {
+      config.token_filter_file = value;
+    } else if (key == "max_book_contracts") {
+      config.max_book_contracts = std::stoull(value);
+    } else if (key == "market_data_stream") {
+      config.market_data_streams.push_back(parseMarketDataEndpoint(value));
     } else {
       throw std::runtime_error("Unknown config key: " + key);
     }
@@ -77,6 +110,14 @@ Config Config::loadFromFile(const std::string& path) {
   }
   if (config.tls_key_pem.empty()) {
     throw std::runtime_error("tls_key_pem is required");
+  }
+  if (!config.market_data_streams.empty()) {
+    if (config.token_filter_file.empty()) {
+      throw std::runtime_error("token_filter_file is required when market_data_stream is configured");
+    }
+    if (config.max_book_contracts == 0) {
+      throw std::runtime_error("max_book_contracts must be greater than zero");
+    }
   }
 
   return config;

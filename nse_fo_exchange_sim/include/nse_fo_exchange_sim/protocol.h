@@ -34,6 +34,10 @@ constexpr uint16_t kTxnOrderModificationRequestTrimmed = 20040;
 constexpr uint16_t kTxnOrderModificationConfirmationTrimmed = 20074;
 constexpr uint16_t kTxnOrderModificationErrorTrimmed = 20042;
 constexpr uint16_t kTxnOrderCancellationRequestTrimmed = 20070;
+constexpr uint16_t kTxnOrderModificationTrimmed = 20040;
+constexpr uint16_t kTxnOrderModificationConfirmationTrimmed = 20074;
+constexpr uint16_t kTxnOrderModificationErrorTrimmed = 20042;
+constexpr uint16_t kTxnOrderCancellationTrimmed = 20070;
 constexpr uint16_t kTxnOrderCancellationConfirmationTrimmed = 20075;
 constexpr uint16_t kTxnOrderCancellationErrorTrimmed = 20072;
 constexpr uint16_t kTxnTradeConfirmationTrimmed = 20222;
@@ -41,6 +45,8 @@ constexpr uint16_t kTxnTradeConfirmationTrimmed = 20222;
 constexpr uint16_t kErrorUnsupportedOrder = 1;
 constexpr uint16_t kErrorUnknownOrder = 2;
 constexpr uint16_t kErrorOrderAlreadyFilled = 3;
+constexpr uint8_t kOrderFlagsIoc = 0x2;
+constexpr uint8_t kOrderFlagsDay = 0x8;
 
 template <typename T>
 inline T byteswap(T value) {
@@ -312,6 +318,44 @@ struct OrderEntryRequestPayload {
   uint8_t reserved4[32];
 };
 
+struct OrderUpdateRequestPayload {
+  uint16_t transaction_code;
+  uint32_t user_id;
+  uint8_t modified_cancelled_by;
+  uint8_t reserved;
+  uint32_t token_no;
+  ContractDescTr contract_description;
+  double order_number;
+  uint8_t account_number[10];
+  uint16_t book_type;
+  uint16_t buy_sell_indicator;
+  uint32_t disclosed_volume;
+  uint32_t disclosed_volume_remaining;
+  uint32_t total_volume_remaining;
+  uint32_t volume;
+  uint32_t volume_filled_today;
+  uint32_t price;
+  uint32_t good_till_date;
+  uint32_t entry_date_time;
+  uint32_t last_modified;
+  uint8_t order_flags1;
+  uint8_t order_flags2;
+  uint16_t branch_id;
+  uint32_t trader_id;
+  uint8_t broker_id[5];
+  uint8_t open_close;
+  uint8_t settlor[12];
+  uint16_t pro_client_indicator;
+  uint8_t additional_flags;
+  uint32_t filler;
+  double nnf_field;
+  uint8_t pan[10];
+  uint32_t algo_id;
+  uint16_t unique_id;
+  uint64_t last_activity_reference;
+  uint8_t reserved4[24];
+};
+
 struct OrderConfirmationPayload {
   uint16_t transaction_code;
   uint32_t log_time;
@@ -445,6 +489,37 @@ struct TradeConfirmationPayload {
   uint16_t reserved3;
   uint64_t last_activity_reference;
   uint8_t reserved4[52];
+};
+
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+
+struct TbtStreamHeader {
+  uint16_t msg_len;
+  uint16_t stream_id;
+  uint32_t seq_no;
+  uint8_t message_type;
+};
+
+struct TbtOrderMessage {
+  TbtStreamHeader header;
+  uint64_t timestamp;
+  double order_id;
+  uint32_t token;
+  uint8_t order_type;
+  uint32_t price;
+  uint32_t quantity;
+};
+
+struct TbtTradeMessage {
+  TbtStreamHeader header;
+  uint64_t timestamp;
+  double buy_order_id;
+  double sell_order_id;
+  uint32_t token;
+  uint32_t trade_price;
+  uint32_t trade_quantity;
 };
 
 #pragma pack(pop)

@@ -1,6 +1,7 @@
 #include "nse_fo_exchange_sim/config.h"
 #include "nse_fo_exchange_sim/crypto.h"
 #include "nse_fo_exchange_sim/protocol.h"
+#include "nse_fo_exchange_sim/replay.h"
 #include "nse_fo_exchange_sim/simulator.h"
 
 #include <arpa/inet.h>
@@ -13,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits.h>
@@ -21,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <zlib.h>
 
 namespace {
 
@@ -141,6 +144,36 @@ void sendUdp(const std::string& host, uint16_t port, const void* payload, std::s
   require(rc == static_cast<ssize_t>(size), "udp sendto failed");
 }
 
+int bindUdpReceiver(uint16_t* out_port) {
+  const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  require(fd >= 0, "udp recv socket() failed");
+
+  sockaddr_in addr {};
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "udp recv bind() failed");
+
+  sockaddr_in bound_addr {};
+  socklen_t len = sizeof(bound_addr);
+  require(getsockname(fd, reinterpret_cast<sockaddr*>(&bound_addr), &len) == 0,
+          "udp recv getsockname failed");
+  *out_port = ntohs(bound_addr.sin_port);
+  return fd;
+}
+
+std::vector<uint8_t> receiveUdpPacket(int fd, int timeout_ms) {
+  timeval timeout {};
+  timeout.tv_sec = timeout_ms / 1000;
+  timeout.tv_usec = (timeout_ms % 1000) * 1000;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+  std::array<uint8_t, 256> buffer {};
+  const ssize_t rc = recv(fd, buffer.data(), buffer.size(), 0);
+  require(rc > 0, "udp recv failed");
+  return std::vector<uint8_t>(buffer.begin(), buffer.begin() + rc);
+}
+
 std::string writeTokenFile(const std::string& build_root, const std::vector<uint32_t>& tokens) {
   const std::string path = build_root + "/test_tokens.txt";
   std::ofstream output(path);
@@ -149,6 +182,76 @@ std::string writeTokenFile(const std::string& build_root, const std::vector<uint
     output << token << '\n';
   }
   return path;
+}
+
+std::array<uint8_t, 64> makeCaptureOrderRecord(uint64_t capture_seconds,
+                                               uint64_t capture_nanos,
+                                               uint16_t stream_id,
+                                               uint32_t seq_no,
+                                               uint8_t message_type,
+                                               double order_id,
+                                               uint32_t token,
+                                               char side,
+                                               uint32_t price,
+                                               uint32_t quantity) {
+  std::array<uint8_t, 64> record {};
+  std::memcpy(record.data(), &capture_seconds, sizeof(capture_seconds));
+  std::memcpy(record.data() + sizeof(capture_seconds), &capture_nanos, sizeof(capture_nanos));
+
+  TbtOrderMessage message {};
+  message.header.msg_len = sizeof(message);
+  message.header.stream_id = stream_id;
+  message.header.seq_no = seq_no;
+  message.header.message_type = message_type;
+  message.timestamp = capture_seconds * 1000000000ULL + capture_nanos;
+  message.order_id = order_id;
+  message.token = token;
+  message.order_type = static_cast<uint8_t>(side);
+  message.price = price;
+  message.quantity = quantity;
+  std::memcpy(record.data() + 16, &message, sizeof(message));
+  return record;
+}
+
+std::array<uint8_t, 64> makeCaptureTradeRecord(uint64_t capture_seconds,
+                                               uint64_t capture_nanos,
+                                               uint16_t stream_id,
+                                               uint32_t seq_no,
+                                               double buy_order_id,
+                                               double sell_order_id,
+                                               uint32_t token,
+                                               uint32_t price,
+                                               uint32_t quantity) {
+  std::array<uint8_t, 64> record {};
+  std::memcpy(record.data(), &capture_seconds, sizeof(capture_seconds));
+  std::memcpy(record.data() + sizeof(capture_seconds), &capture_nanos, sizeof(capture_nanos));
+
+  TbtTradeMessage message {};
+  message.header.msg_len = sizeof(message);
+  message.header.stream_id = stream_id;
+  message.header.seq_no = seq_no;
+  message.header.message_type = 'T';
+  message.timestamp = capture_seconds * 1000000000ULL + capture_nanos;
+  message.buy_order_id = buy_order_id;
+  message.sell_order_id = sell_order_id;
+  message.token = token;
+  message.trade_price = price;
+  message.trade_quantity = quantity;
+  std::memcpy(record.data() + 16, &message, sizeof(message));
+  return record;
+}
+
+std::string writeCaptureFileGz(const std::filesystem::path& path,
+                               const std::vector<std::array<uint8_t, 64>>& records) {
+  gzFile output = gzopen(path.string().c_str(), "wb");
+  require(output != nullptr, "unable to create gzip capture file");
+  for (const auto& record : records) {
+    require(gzwrite(output, record.data(), static_cast<unsigned int>(record.size())) ==
+                static_cast<int>(record.size()),
+            "gzwrite failed");
+  }
+  require(gzclose(output) == Z_OK, "gzclose failed");
+  return path.string();
 }
 
 class SessionClient {
@@ -871,7 +974,8 @@ void testBookMatchingFlow() {
     require(!session.tryReceivePayload<TradeConfirmationPayload>(150).has_value(),
             "first order should still have a resting remainder");
 
-    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 3, 1003.0, 654321, 'S', 998, 7);
+    sendTbtTrade("127.0.0.1", config.market_data_streams.front().port, 3, 4000.0, 1002.0, 654321, 999, 10);
+    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 4, 1003.0, 654321, 'S', 998, 7);
     const auto second_partial_trade = session.receivePayload<TradeConfirmationPayload>();
     require(byteswap(second_partial_trade.fill_price) == 998, "unexpected second partial fill price");
     require(byteswap(second_partial_trade.fill_quantity) == 7, "unexpected second partial fill quantity");
@@ -884,9 +988,12 @@ void testBookMatchingFlow() {
     require(byteswap(second_partial_trade.fill_number) == config.fill_number_start + 1,
             "unexpected second partial fill number");
 
-    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 4, 1004.0, 654321, 'S', 1000, 20);
+    sendTbtTrade("127.0.0.1", config.market_data_streams.front().port, 5, 5000.0, 1003.0, 654321, 998, 7);
+    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 6, 1004.0, 654321, 'S', 1000, 20);
     const auto final_first_trade = session.receivePayload<TradeConfirmationPayload>();
-    require(byteswap(final_first_trade.fill_price) == 1000, "unexpected final first-order fill price");
+    require(byteswap(final_first_trade.fill_price) == 1000,
+            "unexpected final first-order fill price " +
+                std::to_string(byteswap(final_first_trade.fill_price)));
     require(byteswap(final_first_trade.fill_quantity) == 8,
             "unexpected final first-order fill quantity");
     require(byteswap(final_first_trade.remaining_volume) == 0,
@@ -904,7 +1011,7 @@ void testBookMatchingFlow() {
     require(!session.tryReceivePayload<TradeConfirmationPayload>(150).has_value(),
             "second order should rest before modification");
 
-    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 5, 2001.0, 654321, 'B', 995, 40);
+    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 7, 2001.0, 654321, 'B', 995, 40);
     require(!session.tryReceivePayload<TradeConfirmationPayload>(150).has_value(),
             "second order should not fill on non-crossing bid");
 
@@ -995,11 +1102,11 @@ void testBookMatchingFlow() {
     const auto cancel_conf = session.receivePayload<OrderConfirmationPayload>();
     require(byteswap(cancel_conf.transaction_code) == kTxnOrderCancellationConfirmationTrimmed,
             "unexpected cancellation confirmation txn");
-    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 6, 3001.0, 765432, 'S', 790, 20);
+    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 8, 3001.0, 765432, 'S', 790, 20);
     require(!session.tryReceivePayload<TradeConfirmationPayload>(150).has_value(),
             "cancelled order should not fill");
 
-    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 7, 3002.0, 765432, 'S', 700, 5);
+    sendTbtOrder("127.0.0.1", config.market_data_streams.front().port, 'N', 9, 3002.0, 765432, 'S', 700, 5);
     auto ioc_hit = makeFoOrderRequest(user_id, 765432, "BANKNIFTY", 1, 12, 710, 0x2, 9004, 14);
     session.sendPayload(ioc_hit);
     const auto ioc_hit_ack = session.receivePayload<OrderConfirmationPayload>();
@@ -1040,6 +1147,70 @@ void testBookMatchingFlow() {
   app.stop();
 }
 
+void testMulticastReplayFlow() {
+  char cwd[PATH_MAX] {};
+  require(getcwd(cwd, sizeof(cwd)) != nullptr, "getcwd failed");
+  const std::filesystem::path build_root = cwd;
+  const std::filesystem::path replay_dir = build_root / "replay_testdata";
+  std::filesystem::create_directories(replay_dir);
+
+  const std::string file_a = writeCaptureFileGz(
+      replay_dir / "111111_20250916.dat.gz",
+      {makeCaptureOrderRecord(1757994300, 100, 15, 1, 'N', 101.0, 111111, 'S', 995, 10),
+       makeCaptureOrderRecord(1757994300, 300, 15, 3, 'X', 101.0, 111111, 'S', 995, 10)});
+  const std::string file_b = writeCaptureFileGz(
+      replay_dir / "222222_20250916.dat.gz",
+      {makeCaptureTradeRecord(1757994300, 200, 15, 2, 201.0, 301.0, 222222, 1001, 5)});
+  const std::string file_c = writeCaptureFileGz(
+      replay_dir / "333333_20250916.dat.gz",
+      {makeCaptureOrderRecord(1757994300, 150, 18, 1, 'N', 401.0, 333333, 'B', 1002, 7)});
+
+  uint16_t port15 = 0;
+  const int fd15 = bindUdpReceiver(&port15);
+  uint16_t port18 = 0;
+  const int fd18 = bindUdpReceiver(&port18);
+
+  try {
+    ReplayOptions options;
+    options.input_files = {file_a, file_b, file_c};
+    options.stream_destinations.emplace(15, ReplayDestination {"127.0.0.1", port15});
+    options.stream_destinations.emplace(18, ReplayDestination {"127.0.0.1", port18});
+    options.pacing = ReplayPacingMode::kNone;
+
+    MulticastReplayApp replay_app(options);
+    replay_app.run();
+
+    const auto packet1 = receiveUdpPacket(fd15, 500);
+    const auto packet2 = receiveUdpPacket(fd15, 500);
+    const auto packet3 = receiveUdpPacket(fd15, 500);
+    const auto packet4 = receiveUdpPacket(fd18, 500);
+
+    require(packet1.size() == sizeof(TbtOrderMessage), "unexpected replay packet1 size");
+    require(packet2.size() == sizeof(TbtTradeMessage), "unexpected replay packet2 size");
+    require(packet3.size() == sizeof(TbtOrderMessage), "unexpected replay packet3 size");
+    require(packet4.size() == sizeof(TbtOrderMessage), "unexpected replay packet4 size");
+
+    const auto* order1 = reinterpret_cast<const TbtOrderMessage*>(packet1.data());
+    const auto* trade = reinterpret_cast<const TbtTradeMessage*>(packet2.data());
+    const auto* order2 = reinterpret_cast<const TbtOrderMessage*>(packet3.data());
+    const auto* routed = reinterpret_cast<const TbtOrderMessage*>(packet4.data());
+
+    require(order1->header.message_type == 'N', "unexpected first replay message type");
+    require(trade->header.message_type == 'T', "unexpected second replay message type");
+    require(order2->header.message_type == 'X', "unexpected third replay message type");
+    require(routed->header.stream_id == 18, "unexpected routed replay stream id");
+    require(trade->token == 222222, "unexpected replay trade token");
+    require(routed->token == 333333, "unexpected routed replay token");
+  } catch (...) {
+    close(fd15);
+    close(fd18);
+    throw;
+  }
+
+  close(fd15);
+  close(fd18);
+}
+
 }  // namespace
 
 int main() {
@@ -1047,6 +1218,7 @@ int main() {
     testCryptoRoundTrip();
     testFullFlow();
     testBookMatchingFlow();
+    testMulticastReplayFlow();
     std::cout << "All simulator tests passed\n";
     return 0;
   } catch (const std::exception& ex) {

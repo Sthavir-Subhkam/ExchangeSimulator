@@ -8,10 +8,12 @@ set(CMAKE_CXX_EXTENSIONS ON)
 
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 add_library(nse_fo_exchange_sim_lib
   src/config.cpp
   src/crypto.cpp
+  src/replay.cpp
   src/runtime.cpp
 )
 
@@ -25,7 +27,15 @@ target_link_libraries(nse_fo_exchange_sim_lib
     OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
+    ZLIB::ZLIB
 )
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  target_link_libraries(nse_fo_exchange_sim_lib
+    PUBLIC
+      stdc++fs
+  )
+endif()
 
 target_compile_options(nse_fo_exchange_sim_lib
   PRIVATE
@@ -39,6 +49,15 @@ add_executable(nse_fo_exchange_sim
 )
 
 target_link_libraries(nse_fo_exchange_sim
+  PRIVATE
+    nse_fo_exchange_sim_lib
+)
+
+add_executable(nse_fo_multicast_replay
+  src/replay_main.cpp
+)
+
+target_link_libraries(nse_fo_multicast_replay
   PRIVATE
     nse_fo_exchange_sim_lib
 )

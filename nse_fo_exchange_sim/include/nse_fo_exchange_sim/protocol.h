@@ -41,6 +41,16 @@ constexpr uint16_t kTxnOrderCancellationTrimmed = 20070;
 constexpr uint16_t kTxnOrderCancellationConfirmationTrimmed = 20075;
 constexpr uint16_t kTxnOrderCancellationErrorTrimmed = 20072;
 constexpr uint16_t kTxnTradeConfirmationTrimmed = 20222;
+constexpr uint16_t kTxnOrderEntryTrimmed = 2000;
+constexpr uint16_t kTxnOrderConfirmationTrimmed = 2073;
+constexpr uint16_t kTxnOrderErrorTrimmed = 2231;
+constexpr uint16_t kTxnOrderModificationTrimmed = 2040;
+constexpr uint16_t kTxnOrderModificationConfirmationTrimmed = 2074;
+constexpr uint16_t kTxnOrderModificationErrorTrimmed = 2042;
+constexpr uint16_t kTxnOrderCancellationTrimmed = 2070;
+constexpr uint16_t kTxnOrderCancellationConfirmationTrimmed = 2075;
+constexpr uint16_t kTxnOrderCancellationErrorTrimmed = 2072;
+constexpr uint16_t kTxnTradeConfirmationTrimmed = 2222;
 
 constexpr uint16_t kErrorUnsupportedOrder = 1;
 constexpr uint16_t kErrorUnknownOrder = 2;

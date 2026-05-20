@@ -26,6 +26,42 @@ ctest --test-dir build/nse_fo_exchange_sim --output-on-failure
 ./build/nse_fo_exchange_sim/nse_fo_exchange_sim --config nse_fo_exchange_sim/config/example.conf
 ```
 
+## Replay Tool
+
+The project also builds `nse_fo_multicast_replay`, a small UDP sender for archived tokenwise
+capture files. It reads `.dat` or `.dat.gz` files made of fixed 64-byte records and sends the
+embedded compact TBT `N/M/X/T` packets exactly as the simulator expects them.
+
+Basic replay into a single simulator market-data socket:
+
+```bash
+./build/nse_fo_exchange_sim/nse_fo_multicast_replay \
+  --input-dir /data/fullpcap/20250916/tokenwisepcap \
+  --token-file nse_fo_exchange_sim/config/example_tokens.txt \
+  --dest 127.0.0.1:32001
+```
+
+Replay using the capture timestamps at 50x speed:
+
+```bash
+./build/nse_fo_exchange_sim/nse_fo_multicast_replay \
+  --input-dir /data/fullpcap/20250916/tokenwisepcap \
+  --token-file nse_fo_exchange_sim/config/example_tokens.txt \
+  --dest 127.0.0.1:32001 \
+  --pace captured \
+  --speed 50
+```
+
+Replay with explicit per-stream routing:
+
+```bash
+./build/nse_fo_exchange_sim/nse_fo_multicast_replay \
+  --input-dir /data/fullpcap/20250916/tokenwisepcap \
+  --tokens 100519,100521 \
+  --stream-dest 15=239.10.10.1:32001 \
+  --stream-dest 18=239.10.10.2:32002
+```
+
 The config format is simple `key=value` text.
 
 `market_data_stream` may be repeated and uses:
@@ -50,6 +86,7 @@ market_data_stream=127.0.0.1:32001@0.0.0.0
 - Post-fill order modifications return trimmed modification error `20042`.
 - Unsupported order shapes return trimmed order errors.
 - Without any `market_data_stream` entries, accepted orders keep the older immediate-fill behavior.
+- The replay tool streams token files directly and merge-orders them by the capture timestamp prefix.
 - With `market_data_stream` configured, the simulator:
   - builds books only for token ids listed in `token_filter_file`
   - caps active books at `max_book_contracts`

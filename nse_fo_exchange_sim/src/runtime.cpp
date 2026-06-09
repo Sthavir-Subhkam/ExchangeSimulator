@@ -195,6 +195,45 @@ std::string peerIpAddress(int fd) {
   return std::string(ip_buffer);
 }
 
+std::string ipv4Address(const sockaddr_in& addr) {
+  char ip_buffer[INET_ADDRSTRLEN] {};
+  if (inet_ntop(AF_INET, &addr.sin_addr, ip_buffer, sizeof(ip_buffer)) == nullptr) {
+    return "";
+  }
+  return std::string(ip_buffer);
+}
+
+void logTbtOrderMessage(const TbtOrderMessage& message,
+                        const sockaddr_in& peer_addr,
+                        std::size_t packet_size) {
+  std::cout << "[tbt feed] contract_token=" << message.token
+            << " packet=order"
+            << " type=" << static_cast<char>(message.header.message_type)
+            << " stream_id=" << message.header.stream_id
+            << " seq_no=" << message.header.seq_no
+            << " order_id_bits=" << doubleBits(message.order_id)
+            << " price=" << message.price
+            << " quantity=" << message.quantity
+            << " source=" << ipv4Address(peer_addr) << ':' << ntohs(peer_addr.sin_port)
+            << " bytes=" << packet_size << std::endl;
+}
+
+void logTbtTradeMessage(const TbtTradeMessage& message,
+                        const sockaddr_in& peer_addr,
+                        std::size_t packet_size) {
+  std::cout << "[tbt feed] contract_token=" << message.token
+            << " packet=trade"
+            << " type=" << static_cast<char>(message.header.message_type)
+            << " stream_id=" << message.header.stream_id
+            << " seq_no=" << message.header.seq_no
+            << " buy_order_id_bits=" << doubleBits(message.buy_order_id)
+            << " sell_order_id_bits=" << doubleBits(message.sell_order_id)
+            << " trade_price=" << message.trade_price
+            << " trade_quantity=" << message.trade_quantity
+            << " source=" << ipv4Address(peer_addr) << ':' << ntohs(peer_addr.sin_port)
+            << " bytes=" << packet_size << std::endl;
+}
+
 void readFully(int fd, void* buffer, std::size_t size) {
   auto* out = static_cast<uint8_t*>(buffer);
   std::size_t read_total = 0;
@@ -1712,8 +1751,6 @@ private:
         }
         continue;
       }
-      //std::cout<<"Received market data packet of size " << rc << " from " << inet_ntoa(peer_addr.sin_addr) << ":"
-      //          << ntohs(peer_addr.sin_port) << std::endl;
       const std::size_t packet_size = static_cast<std::size_t>(rc);
       if (packet_size < sizeof(TbtStreamHeader)) {
         continue;
@@ -1729,6 +1766,7 @@ private:
           }
           TbtOrderMessage message {};
           std::memcpy(&message, buffer.data(), sizeof(message));
+          logTbtOrderMessage(message, peer_addr, packet_size);
           dispatchEngineEvents(engine_.onTbtOrderMessage(message));
           break;
         }
@@ -1738,6 +1776,7 @@ private:
           }
           TbtTradeMessage message {};
           std::memcpy(&message, buffer.data(), sizeof(message));
+          logTbtTradeMessage(message, peer_addr, packet_size);
           dispatchEngineEvents(engine_.onTbtTradeMessage(message));
           break;
         }
